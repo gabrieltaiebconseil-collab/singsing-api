@@ -328,7 +328,7 @@ async function createClipFile(
 
   const previewDuration = 30;
   const trackDuration = trackDurationMs ? trackDurationMs / 1000 : 180;
-  const previewStartInSong = Math.max(0, trackDuration * 0.3);
+  const previewStartInSong = Math.max(0, trackDuration * 0.33);
 
   const rawClipStart = startTime - previewStartInSong;
   const rawClipEnd = endTime - previewStartInSong;

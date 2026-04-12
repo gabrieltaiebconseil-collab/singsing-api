@@ -287,7 +287,7 @@ export default function EditorScreen() {
 
   const trackDuration = parseInt(params.trackTimeMillis || "0", 10) / 1000;
   const previewDuration = 30;
-  const previewStartTime = Math.max(0, trackDuration * 0.3);
+  const previewStartTime = Math.max(0, trackDuration * 0.33);
   const previewEndTime = previewStartTime + previewDuration;
 
   const { data: lyricsData, isLoading: lyricsLoading } = useGetSongLyrics(
