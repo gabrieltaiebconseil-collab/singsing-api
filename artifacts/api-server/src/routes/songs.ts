@@ -327,11 +327,9 @@ async function createClipFile(
   await pipeline(Readable.fromWeb(audioResponse.body as any), fileStream);
 
   const previewDuration = 30;
-  const trackDuration = trackDurationMs ? trackDurationMs / 1000 : 180;
-  const previewStartInSong = Math.max(0, trackDuration * 0.33);
-
-  const rawClipStart = startTime - previewStartInSong;
-  const rawClipEnd = endTime - previewStartInSong;
+  // startTime and endTime are already preview-relative (0-30s)
+  const rawClipStart = startTime;
+  const rawClipEnd = endTime;
 
   log.info({
     startTime,
