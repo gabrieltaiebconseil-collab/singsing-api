@@ -216,7 +216,7 @@ function CreatePopup({ visible, lyricsPreview, duration, onPress, onReset, color
         {`${durationText} \u00B7 pr\u00EAt \u00E0 partager`}
       </Text>
 
-      {isOutOfPreview && !isYouTube ? (
+      {false ? (
         <View style={styles.popupWarning}>
           <Feather name="alert-triangle" size={14} color="#FFB74D" />
           <Text style={styles.popupWarningText}>
@@ -408,7 +408,7 @@ export default function EditorScreen() {
   );
 
   const hasSelection = startTime !== null && endTime !== null;
-  const isYouTube = params.source === "youtube";
+  const isYouTube = true; // always use yt-dlp for precise cutting
 
   const clipStartInPreview = useMemo(() => {
     if (startTime === null) return 0;
@@ -424,10 +424,8 @@ export default function EditorScreen() {
     return Math.max(0, clipEndInPreview - clipStartInPreview);
   }, [clipStartInPreview, clipEndInPreview]);
 
-  const isOutOfPreview = useMemo(() => {
-    if (!hasSelection || isYouTube) return false;
-    return clipStartInPreview < -0.5 || clipEndInPreview > previewDuration + 0.5;
-  }, [hasSelection, clipStartInPreview, clipEndInPreview, previewDuration, isYouTube]);
+  // Always false — yt-dlp handles any timestamp precisely
+  const isOutOfPreview = false;
 
   const MIN_CLIP_DURATION = 3;
 
