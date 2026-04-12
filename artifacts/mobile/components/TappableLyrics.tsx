@@ -14,19 +14,23 @@ interface TappableLyricsProps {
   startIndex: number | null;
   endIndex: number | null;
   onWordTap: (index: number) => void;
+  previewStartTime: number;
+  previewEndTime: number;
 }
 
-function WordButton({ word, index, isStart, isEnd, isInSelection, onTap }: {
+function WordButton({ word, index, isStart, isEnd, isInSelection, isInPreview, onTap }: {
   word: string;
   index: number;
   isStart: boolean;
   isEnd: boolean;
   isInSelection: boolean;
+  isInPreview: boolean;
   onTap: (index: number) => void;
 }) {
   const scaleAnim = useRef(new Animated.Value(1)).current;
 
   const handlePress = () => {
+    if (!isInPreview) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     Animated.sequence([
       Animated.spring(scaleAnim, { toValue: 1.15, useNativeDriver: true, speed: 50, bounciness: 10 }),
@@ -36,7 +40,7 @@ function WordButton({ word, index, isStart, isEnd, isInSelection, onTap }: {
   };
 
   let bgColor = "transparent";
-  let textColor = "rgba(255,255,255,0.85)";
+  let textColor = isInPreview ? "rgba(255,255,255,0.85)" : "rgba(255,255,255,0.25)";
   let fontWeight: "normal" | "600" = "normal";
 
   if (isStart) {
@@ -75,6 +79,8 @@ export function TappableLyrics({
   startIndex,
   endIndex,
   onWordTap,
+  previewStartTime,
+  previewEndTime,
 }: TappableLyricsProps) {
   const colors = useColors();
   const scrollRef = useRef<ScrollView>(null);
@@ -110,6 +116,7 @@ export function TappableLyrics({
               i > startIndex &&
               i < endIndex
             }
+            isInPreview={w.time >= previewStartTime && w.time <= previewEndTime}
             onTap={onWordTap}
           />
         ))}

@@ -364,6 +364,8 @@ export default function EditorScreen() {
 
   const handleWordTap = useCallback(
     (index: number) => {
+      // Block out-of-preview words
+      if (!words[index] || words[index].time < previewStartTime || words[index].time > previewEndTime) return;
       if (startWordIndex === null) {
         setStartWordIndex(index);
         setEndWordIndex(null);
@@ -741,6 +743,8 @@ export default function EditorScreen() {
                 startIndex={startWordIndex}
                 endIndex={endWordIndex}
                 onWordTap={handleWordTap}
+                previewStartTime={previewStartTime}
+                previewEndTime={previewEndTime}
               />
             </>
           ) : (
