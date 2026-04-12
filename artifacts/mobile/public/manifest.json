@@ -1,0 +1,27 @@
+{
+  "name": "Sing Sing",
+  "short_name": "SingSing",
+  "description": "Trouve une chanson, clippe un passage, partage le vibe",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "theme_color": "#0d0a1a",
+  "background_color": "#0d0a1a",
+  "icons": [
+    {
+      "src": "/assets/images/icon.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["music", "entertainment"],
+  "lang": "fr",
+  "share_target": {
+    "action": "/reply",
+    "method": "GET",
+    "params": {
+      "text": "message"
+    }
+  }
+}

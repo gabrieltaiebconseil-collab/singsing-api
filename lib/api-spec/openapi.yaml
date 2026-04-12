@@ -1,0 +1,547 @@
+openapi: 3.1.0
+info:
+  # Do not change the title, if the title changes, the import paths will be broken
+  title: Api
+  version: 0.1.0
+  description: API specification
+servers:
+  - url: /api
+    description: Base API path
+tags:
+  - name: health
+    description: Health operations
+  - name: songs
+    description: Song search and lyrics
+paths:
+  /healthz:
+    get:
+      operationId: healthCheck
+      tags: [health]
+      summary: Health check
+      description: Returns server health status
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+  /songs/search:
+    get:
+      operationId: searchSongs
+      tags: [songs]
+      summary: Search for songs
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: attribute
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: mode
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - paroles
+              - artiste
+              - titre
+              - album
+              - soundtrack
+              - humeur
+              - evenement
+              - vocal
+        - name: lang
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - fr
+              - en
+              - es
+              - it
+              - tr
+              - ar
+              - pt
+              - de
+              - mix
+      responses:
+        "200":
+          description: Search results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SongSearchResponse"
+  /songs/lyrics:
+    get:
+      operationId: getSongLyrics
+      tags: [songs]
+      summary: Get synchronized lyrics for a song
+      parameters:
+        - name: title
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: artist
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: trackDurationMs
+          in: query
+          required: false
+          schema:
+            type: number
+      responses:
+        "200":
+          description: Lyrics result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LyricsResponse"
+  /songs/clip:
+    get:
+      operationId: getClip
+      tags: [songs]
+      summary: Create and download audio clip
+      parameters:
+        - name: previewUrl
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: startTime
+          in: query
+          required: true
+          schema:
+            type: number
+        - name: endTime
+          in: query
+          required: true
+          schema:
+            type: number
+        - name: trackDurationMs
+          in: query
+          required: false
+          schema:
+            type: number
+      responses:
+        "200":
+          description: Audio clip file
+          content:
+            audio/mp4:
+              schema:
+                type: string
+                format: binary
+  /songs/clip/host:
+    post:
+      operationId: hostClip
+      tags: [songs]
+      summary: Create clip and host it temporarily for sharing
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/HostClipRequest"
+      responses:
+        "200":
+          description: Hosted clip info
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HostClipResponse"
+  /songs/clip/{id}:
+    get:
+      operationId: getHostedClip
+      tags: [songs]
+      summary: Download a hosted clip by ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Audio clip file
+          content:
+            audio/mp4:
+              schema:
+                type: string
+                format: binary
+        "404":
+          description: Clip not found or expired
+  /songs/youtube-search:
+    post:
+      operationId: youtubeSearch
+      tags: [songs]
+      summary: Search YouTube for a song and return metadata without downloading
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                query:
+                  type: string
+              required:
+                - query
+      responses:
+        "200":
+          description: YouTube video metadata
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/YouTubeSearchResult"
+        "404":
+          description: Not found on YouTube
+  /songs/identify:
+    post:
+      operationId: identifySong
+      tags: [songs]
+      summary: Identify a song from a text query using classics DB or AI
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                query:
+                  type: string
+              required:
+                - query
+      responses:
+        "200":
+          description: Identified song info
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IdentifiedSong"
+  /songs/clip-youtube:
+    post:
+      operationId: createYouTubeClip
+      tags: [songs]
+      summary: Create audio clip from YouTube via yt-dlp
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/YouTubeClipRequest"
+      responses:
+        "200":
+          description: Audio clip file
+          content:
+            audio/mp4:
+              schema:
+                type: string
+                format: binary
+  /songs/clip-youtube/host:
+    post:
+      operationId: hostYouTubeClip
+      tags: [songs]
+      summary: Create YouTube clip and host it for sharing
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/YouTubeClipHostRequest"
+      responses:
+        "200":
+          description: Hosted clip info
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HostClipResponse"
+  /songs/reply-suggestions:
+    post:
+      operationId: getReplySuggestions
+      tags: [songs]
+      summary: Get AI song reply suggestions for a message
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReplySuggestionsRequest"
+      responses:
+        "200":
+          description: Song reply suggestions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReplySuggestionsResponse"
+components:
+  schemas:
+    HealthStatus:
+      type: object
+      properties:
+        status:
+          type: string
+      required:
+        - status
+    SongResult:
+      type: object
+      properties:
+        trackId:
+          type: integer
+        trackName:
+          type: string
+        artistName:
+          type: string
+        collectionName:
+          type: string
+        artworkUrl100:
+          type: string
+        previewUrl:
+          type: string
+        trackTimeMillis:
+          type: integer
+        lyricsStatus:
+          type: string
+          enum:
+            - synced
+            - plain
+            - ai_available
+            - waveform_only
+        isOriginal:
+          type: boolean
+        isCoupDeCoeur:
+          type: boolean
+        isCurated:
+          type: boolean
+        curatedWhy:
+          type: string
+      required:
+        - trackId
+        - trackName
+        - artistName
+        - collectionName
+        - artworkUrl100
+        - previewUrl
+        - trackTimeMillis
+    SongSearchResponse:
+      type: object
+      properties:
+        results:
+          type: array
+          items:
+            $ref: "#/components/schemas/SongResult"
+      required:
+        - results
+    LyricWord:
+      type: object
+      properties:
+        word:
+          type: string
+        time:
+          type: number
+      required:
+        - word
+        - time
+    LyricsResponse:
+      type: object
+      properties:
+        found:
+          type: boolean
+        words:
+          type: array
+          items:
+            $ref: "#/components/schemas/LyricWord"
+        duration:
+          type: number
+        source:
+          type: string
+      required:
+        - found
+        - words
+        - duration
+        - source
+    HostClipRequest:
+      type: object
+      properties:
+        previewUrl:
+          type: string
+        startTime:
+          type: string
+        endTime:
+          type: string
+        trackDurationMs:
+          type: string
+      required:
+        - previewUrl
+        - startTime
+        - endTime
+    HostClipResponse:
+      type: object
+      properties:
+        clipId:
+          type: string
+        clipUrl:
+          type: string
+      required:
+        - clipId
+        - clipUrl
+    ReplySuggestionsRequest:
+      type: object
+      properties:
+        message:
+          type: string
+        language:
+          type: string
+          description: "Preferred language for suggestions (fr, en, es, it, tr, other)"
+      required:
+        - message
+    ReplySuggestionITunes:
+      type: object
+      properties:
+        trackId:
+          type: integer
+        trackName:
+          type: string
+        artistName:
+          type: string
+        collectionName:
+          type: string
+        artworkUrl100:
+          type: string
+        previewUrl:
+          type: string
+        trackTimeMillis:
+          type: integer
+      required:
+        - trackId
+        - trackName
+        - artistName
+        - collectionName
+        - artworkUrl100
+        - previewUrl
+        - trackTimeMillis
+    ReplySuggestion:
+      type: object
+      properties:
+        title:
+          type: string
+        artist:
+          type: string
+        lyrics_fragment:
+          type: string
+        why:
+          type: string
+        verified:
+          type: boolean
+        has_lyrics:
+          type: boolean
+        lyrics_status:
+          type: string
+          nullable: true
+        itunes:
+          $ref: "#/components/schemas/ReplySuggestionITunes"
+      required:
+        - title
+        - artist
+        - lyrics_fragment
+        - why
+        - verified
+        - has_lyrics
+        - itunes
+    IdentifiedSong:
+      type: object
+      properties:
+        title:
+          type: string
+        artist:
+          type: string
+        year:
+          type: integer
+        youtube_query:
+          type: string
+        iconic_fragment:
+          type: string
+        iconic_lyrics_fragment:
+          type: string
+        fragment_start:
+          type: number
+        source:
+          type: string
+          enum:
+            - classics_db
+            - ai
+            - none
+        confidence:
+          type: string
+    YouTubeSearchResult:
+      type: object
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        artist:
+          type: string
+        duration:
+          type: number
+        thumbnail:
+          type: string
+        youtube_id:
+          type: string
+        source:
+          type: string
+          enum:
+            - youtube
+    YouTubeClipRequest:
+      type: object
+      properties:
+        youtubeQuery:
+          type: string
+        startSeconds:
+          type: number
+        durationSeconds:
+          type: number
+      required:
+        - youtubeQuery
+        - startSeconds
+        - durationSeconds
+    YouTubeClipHostRequest:
+      type: object
+      properties:
+        youtubeQuery:
+          type: string
+        startSeconds:
+          type: number
+        durationSeconds:
+          type: number
+        trackName:
+          type: string
+        artistName:
+          type: string
+        artworkUrl:
+          type: string
+        lyrics:
+          type: string
+        senderName:
+          type: string
+      required:
+        - youtubeQuery
+        - startSeconds
+        - durationSeconds
+    ReplySuggestionsResponse:
+      type: object
+      properties:
+        suggestions:
+          type: array
+          items:
+            $ref: "#/components/schemas/ReplySuggestion"
+      required:
+        - suggestions
