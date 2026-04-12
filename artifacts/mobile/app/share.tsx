@@ -143,38 +143,22 @@ export default function ShareScreen() {
 
         let hostResponse: Response;
 
-        if (isYouTube) {
-          hostResponse = await fetch(`${baseUrl}/api/songs/clip-youtube/host`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              youtubeQuery: params.youtubeQuery,
-              startSeconds: startSec,
-              durationSeconds: duration,
-              trackName: params.trackName || "",
-              artistName: params.artistName || "",
-              artworkUrl: params.artworkUrl100 || "",
-              lyrics: params.lyrics || "",
-              senderName: "",
-            }),
-          });
-        } else {
-          hostResponse = await fetch(`${baseUrl}/api/songs/clip/host`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              previewUrl: params.previewUrl,
-              startTime: params.startTime,
-              endTime: params.endTime,
-              trackDurationMs: params.trackTimeMillis || "0",
-              trackName: params.trackName || "",
-              artistName: params.artistName || "",
-              artworkUrl: params.artworkUrl100 || "",
-              lyrics: params.lyrics || "",
-              senderName: "",
-            }),
-          });
-        }
+        // Always use YouTube path for precise clip cutting
+        const youtubeQuery = params.youtubeQuery || `${params.trackName} ${params.artistName} official audio`;
+        hostResponse = await fetch(`${baseUrl}/api/songs/clip-youtube/host`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            youtubeQuery: youtubeQuery,
+            startSeconds: startSec,
+            durationSeconds: duration,
+            trackName: params.trackName || "",
+            artistName: params.artistName || "",
+            artworkUrl: params.artworkUrl100 || "",
+            lyrics: params.lyrics || "",
+            senderName: "",
+          }),
+        });
 
         if (!hostResponse.ok) throw new Error("Failed to create clip");
 
@@ -183,21 +167,16 @@ export default function ShareScreen() {
         const serverClipId: string | null = hostData.clipId || null;
 
         let clipResponse: Response;
-        if (isYouTube) {
-          clipResponse = await fetch(`${baseUrl}/api/songs/clip-youtube`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              youtubeQuery: params.youtubeQuery,
-              startSeconds: startSec,
-              durationSeconds: duration,
-            }),
-          });
-        } else {
-          clipResponse = await fetch(clipUrl || `${baseUrl}/api/songs/clip?previewUrl=${encodeURIComponent(
-            params.previewUrl || ""
-          )}&startTime=${params.startTime}&endTime=${params.endTime}&trackDurationMs=${params.trackTimeMillis || "0"}`);
-        }
+        // Always use YouTube path
+        clipResponse = await fetch(`${baseUrl}/api/songs/clip-youtube`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            youtubeQuery: youtubeQuery,
+            startSeconds: startSec,
+            durationSeconds: duration,
+          }),
+        });
 
         if (!clipResponse.ok) throw new Error("Failed to download clip");
 
