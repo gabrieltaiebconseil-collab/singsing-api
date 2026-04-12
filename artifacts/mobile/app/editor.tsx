@@ -435,54 +435,13 @@ export default function EditorScreen() {
     if (startTime === null || endTime === null) return;
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
 
-    // If selection is outside preview window, find same lyrics inside preview
-    let resolvedStartIndex = startWordIndex;
-    let resolvedEndIndex = endWordIndex;
-    
-    if (clipStartInPreview < -0.5 && startWordIndex !== null && endWordIndex !== null) {
-      // Get selected words text
-      const selectedWords = words.slice(
-        Math.min(startWordIndex, endWordIndex),
-        Math.max(startWordIndex, endWordIndex) + 1
-      ).map((w: any) => w.word.toLowerCase());
-      
-      // Find same sequence in preview window
-      const previewWords = words.filter((w: any) => 
-        w.time >= previewStartTime && w.time <= previewEndTime
-      );
-      
-      // Try to find matching first word in preview
-      const firstWord = selectedWords[0];
-      const matchInPreview = previewWords.findIndex((w: any) => 
-        w.word.toLowerCase() === firstWord
-      );
-      
-      if (matchInPreview >= 0) {
-        const previewWordInFull = words.findIndex((w: any) => w === previewWords[matchInPreview]);
-        if (previewWordInFull >= 0) {
-          resolvedStartIndex = previewWordInFull;
-          resolvedEndIndex = Math.min(previewWordInFull + (endWordIndex - startWordIndex), words.length - 1);
-        }
-      } else {
-        // No match found — use first available words in preview
-        const firstPreviewIdx = words.findIndex((w: any) => w.time >= previewStartTime);
-        if (firstPreviewIdx >= 0) {
-          resolvedStartIndex = firstPreviewIdx;
-          resolvedEndIndex = Math.min(firstPreviewIdx + (endWordIndex - startWordIndex), words.length - 1);
-        }
-      }
+    // Use ABSOLUTE lrclib timestamps — yt-dlp cuts at exact song position
+    const absoluteStart = startTime; // e.g. 105.3s in full song
+    let absoluteEnd = endTime;
+    if (absoluteEnd - absoluteStart < MIN_CLIP_DURATION) {
+      absoluteEnd = absoluteStart + MIN_CLIP_DURATION;
     }
-
-    const resolvedStart = resolvedStartIndex !== null && words[resolvedStartIndex] ? words[resolvedStartIndex].time : startTime;
-    const resolvedEnd = resolvedEndIndex !== null && words[resolvedEndIndex] ? words[resolvedEndIndex].time : endTime;
-    const resolvedClipStart = Math.max(0, resolvedStart - previewStartTime);
-    const resolvedClipEnd = Math.max(resolvedClipStart + MIN_CLIP_DURATION, resolvedEnd - previewStartTime);
-
-    let finalEnd = resolvedEnd;
-    if (finalEnd - resolvedStart < MIN_CLIP_DURATION) {
-      finalEnd = resolvedStart + MIN_CLIP_DURATION;
-    }
-    const finalDuration = Math.max(MIN_CLIP_DURATION, resolvedClipEnd - resolvedClipStart);
+    const clipDurationSec = Math.min(30, absoluteEnd - absoluteStart);
 
     let selectedLyrics = "";
     if (startWordIndex !== null && endWordIndex !== null && words.length > 0) {
@@ -491,6 +450,8 @@ export default function EditorScreen() {
       selectedLyrics = words.slice(start, end + 1).map((w: any) => w.word).join(" ");
     }
 
+    const youtubeQuery = params.youtubeQuery || `${params.trackName} ${params.artistName} official audio`;
+
     router.push({
       pathname: "/share",
       params: {
@@ -498,15 +459,13 @@ export default function EditorScreen() {
         artistName: params.artistName,
         artworkUrl100: params.artworkUrl100,
         previewUrl: params.previewUrl || "",
-        startTime: resolvedClipStart.toString(),
-        endTime: resolvedClipEnd.toString(),
-        clipDuration: finalDuration.toFixed(1),
+        startTime: absoluteStart.toString(),
+        endTime: absoluteEnd.toString(),
+        clipDuration: clipDurationSec.toFixed(1),
         trackTimeMillis: params.trackTimeMillis,
         lyrics: selectedLyrics,
-        ...(params.source === "youtube" ? {
-          source: "youtube",
-          youtubeQuery: params.youtubeQuery || "",
-        } : {}),
+        source: "youtube",
+        youtubeQuery: youtubeQuery,
       },
     });
   };

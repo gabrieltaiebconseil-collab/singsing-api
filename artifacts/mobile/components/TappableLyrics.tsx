@@ -30,7 +30,6 @@ function WordButton({ word, index, isStart, isEnd, isInSelection, isInPreview, o
   const scaleAnim = useRef(new Animated.Value(1)).current;
 
   const handlePress = () => {
-    if (!isInPreview) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     Animated.sequence([
       Animated.spring(scaleAnim, { toValue: 1.15, useNativeDriver: true, speed: 50, bounciness: 10 }),
@@ -40,7 +39,7 @@ function WordButton({ word, index, isStart, isEnd, isInSelection, isInPreview, o
   };
 
   let bgColor = "transparent";
-  let textColor = isInPreview ? "rgba(255,255,255,0.85)" : "rgba(255,255,255,0.25)";
+  let textColor = "rgba(255,255,255,0.85)"; // all words selectable with yt-dlp
   let fontWeight: "normal" | "600" = "normal";
 
   if (isStart) {
