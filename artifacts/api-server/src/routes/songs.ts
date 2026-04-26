@@ -443,12 +443,142 @@ function classicLookup(query: string): ClassicSong | null {
   return bestScore >= 0.4 ? bestMatch : null;
 }
 
+type PickedVideo = {
+  id: string;
+  title: string;
+  durationSec: number;
+  url: string;
+  channel?: string;
+};
+
+type ClipFailureStage = "sanitize" | "yt-dlp-search" | "yt-dlp-download" | "output-missing" | "ffmpeg";
+
+type ClipResult =
+  | {
+      ok: true;
+      data: Buffer;
+      cleanup: () => void;
+      picked: PickedVideo;
+      pickReason: PickResult["reason"];
+      candidates: PickedVideo[];
+    }
+  | {
+      ok: false;
+      stage: ClipFailureStage;
+      detail: string;
+      picked?: PickedVideo;
+      candidates?: PickedVideo[];
+      ytStdout?: string;
+      ytStderr?: string;
+      ffmpegStderr?: string;
+    };
+
+const NON_STUDIO_TITLE_RE = /\b(live|concert|remix|cover|reaction|tutorial|karaoke|instrumental|reverb|sped\s*up|slowed)\b/i;
+const DURATION_MATCH_TOLERANCE_PCT = 3;
+
+async function ytdlpSearchN(
+  sanitizedQuery: string,
+  n: number,
+  log: any
+): Promise<
+  | { ok: true; candidates: PickedVideo[] }
+  | { ok: false; detail: string; ytStdout?: string; ytStderr?: string }
+> {
+  try {
+    const stdout = await new Promise<string>((resolve, reject) => {
+      execFile(
+        "yt-dlp",
+        ["--dump-json", "--flat-playlist", "--no-warnings", `ytsearch${n}:${sanitizedQuery}`],
+        { timeout: 25000 },
+        (error, out, err) => {
+          if (error) reject(Object.assign(error, { stdout: out, stderr: err }));
+          else resolve(out);
+        }
+      );
+    });
+    const candidates: PickedVideo[] = [];
+    for (const line of stdout.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      try {
+        const info = JSON.parse(trimmed);
+        if (!info?.id) continue;
+        candidates.push({
+          id: info.id,
+          title: info.title || sanitizedQuery,
+          durationSec: typeof info.duration === "number" ? info.duration : 0,
+          url: info.webpage_url || info.url || `https://www.youtube.com/watch?v=${info.id}`,
+          channel: info.channel || info.uploader,
+        });
+      } catch {}
+    }
+    if (candidates.length === 0) {
+      return { ok: false, detail: "yt-dlp search returned no parseable results", ytStdout: stdout };
+    }
+    return { ok: true, candidates };
+  } catch (err: any) {
+    log.error({ err, query: sanitizedQuery }, "yt-dlp metadata search failed");
+    return {
+      ok: false,
+      detail: err?.message || String(err),
+      ytStdout: err?.stdout,
+      ytStderr: err?.stderr,
+    };
+  }
+}
+
+type PickResult = {
+  picked: PickedVideo;
+  reason: "duration-match" | "first-non-studio-filtered" | "first-fallback";
+  candidates: PickedVideo[];
+  filteredOut: PickedVideo[];
+};
+
+function pickBestCandidate(candidates: PickedVideo[], trackDurationMs?: number): PickResult {
+  const filteredOut = candidates.filter(c => NON_STUDIO_TITLE_RE.test(c.title));
+  const studioCandidates = candidates.filter(c => !NON_STUDIO_TITLE_RE.test(c.title));
+  const pool = studioCandidates.length > 0 ? studioCandidates : candidates;
+
+  if (trackDurationMs && trackDurationMs > 0) {
+    const expectedSec = trackDurationMs / 1000;
+    const tolerance = expectedSec * (DURATION_MATCH_TOLERANCE_PCT / 100);
+    let best: { c: PickedVideo; delta: number } | null = null;
+    for (const c of pool) {
+      if (!c.durationSec) continue;
+      const delta = Math.abs(c.durationSec - expectedSec);
+      if (delta <= tolerance && (!best || delta < best.delta)) {
+        best = { c, delta };
+      }
+    }
+    if (best) {
+      return { picked: best.c, reason: "duration-match", candidates, filteredOut };
+    }
+  }
+
+  return {
+    picked: pool[0],
+    reason: studioCandidates.length > 0 ? "first-non-studio-filtered" : "first-fallback",
+    candidates,
+    filteredOut,
+  };
+}
+
+async function ytdlpSearchOne(sanitizedQuery: string, log: any): Promise<
+  | { ok: true; picked: PickedVideo }
+  | { ok: false; detail: string; ytStdout?: string; ytStderr?: string }
+> {
+  const result = await ytdlpSearchN(sanitizedQuery, 1, log);
+  if (!result.ok) return result;
+  return { ok: true, picked: result.candidates[0] };
+}
+
 async function createYouTubeClipFile(
   youtubeQuery: string,
   startSeconds: number,
   durationSeconds: number,
-  log: any
-): Promise<{ data: Buffer; cleanup: () => void } | null> {
+  log: any,
+  trackDurationMs?: number
+): Promise<ClipResult> {
   const clipTmpDir = join(tmpdir(), "singsing-yt-clips");
   if (!existsSync(clipTmpDir)) {
     mkdirSync(clipTmpDir, { recursive: true });
@@ -461,23 +591,40 @@ async function createYouTubeClipFile(
   const sanitizedQuery = youtubeQuery.replace(/[^\w\s\-'àâäéèêëïîôùûüÿçœæÀÂÄÉÈÊËÏÎÔÙÛÜŸÇŒÆ]/gi, '').slice(0, 200);
   if (!sanitizedQuery.trim()) {
     log.error("YouTube query is empty after sanitization");
-    return null;
+    return { ok: false, stage: "sanitize", detail: "YouTube query is empty after sanitization" };
   }
+
+  log.info({ youtubeQuery: sanitizedQuery, startSeconds, durationSeconds, trackDurationMs }, "yt-dlp metadata search starting");
+  const search = await ytdlpSearchN(sanitizedQuery, 5, log);
+  if (!search.ok) {
+    return {
+      ok: false,
+      stage: "yt-dlp-search",
+      detail: search.detail,
+      ytStdout: search.ytStdout,
+      ytStderr: search.ytStderr,
+    };
+  }
+  const pick = pickBestCandidate(search.candidates, trackDurationMs);
+  const picked = pick.picked;
+  log.info({ picked, reason: pick.reason, candidates: search.candidates }, "yt-dlp picked video");
 
   const ytArgs = [
     "-x", "--audio-format", "m4a", "--audio-quality", "128K",
     "-o", `${rawPath}.%(ext)s`,
-    `ytsearch1:${sanitizedQuery}`,
-    "--no-playlist", "--no-warnings"
+    picked.url,
+    "--no-playlist", "--no-warnings",
   ];
 
-  log.info({ youtubeQuery: sanitizedQuery, startSeconds, durationSeconds }, "yt-dlp full download starting");
-
+  let ytStdout = "";
+  let ytStderr = "";
   try {
     await new Promise<void>((resolve, reject) => {
       execFile("yt-dlp", ytArgs, { timeout: 120000 }, (error, stdout, stderr) => {
+        ytStdout = stdout || "";
+        ytStderr = stderr || "";
         if (error) {
-          log.error({ error, stdout, stderr }, "yt-dlp download failed");
+          log.error({ error, stdout, stderr, picked }, "yt-dlp download failed");
           reject(error);
         } else {
           log.info("yt-dlp download complete");
@@ -485,14 +632,28 @@ async function createYouTubeClipFile(
         }
       });
     });
-  } catch {
-    return null;
+  } catch (err: any) {
+    return {
+      ok: false,
+      stage: "yt-dlp-download",
+      detail: err?.message || String(err),
+      picked,
+      ytStdout,
+      ytStderr,
+    };
   }
 
   const downloadedFiles = readdirSync(clipTmpDir).filter(f => f.startsWith(`yt-raw-${id}`));
   if (downloadedFiles.length === 0) {
-    log.error("yt-dlp output file not found");
-    return null;
+    log.error({ picked }, "yt-dlp output file not found");
+    return {
+      ok: false,
+      stage: "output-missing",
+      detail: "yt-dlp output file not found after download",
+      picked,
+      ytStdout,
+      ytStderr,
+    };
   }
 
   const downloadedPath = join(clipTmpDir, downloadedFiles[0]);
@@ -505,25 +666,39 @@ async function createYouTubeClipFile(
     clipPath
   ];
 
+  let ffmpegStderr = "";
   try {
     await new Promise<void>((resolve, reject) => {
       execFile("ffmpeg", ffmpegArgs, { timeout: 15000 }, (error, _stdout, stderr) => {
+        ffmpegStderr = stderr || "";
         if (error) {
-          log.error({ error, stderr }, "FFmpeg clip extraction failed");
+          log.error({ error, stderr, picked }, "FFmpeg clip extraction failed");
           reject(error);
         } else {
           resolve();
         }
       });
     });
-  } catch {
+  } catch (err: any) {
     try { unlinkSync(downloadedPath); } catch {}
-    return null;
+    return {
+      ok: false,
+      stage: "ffmpeg",
+      detail: err?.message || String(err),
+      picked,
+      ffmpegStderr,
+    };
   }
 
   if (!existsSync(clipPath)) {
     try { unlinkSync(downloadedPath); } catch {}
-    return null;
+    return {
+      ok: false,
+      stage: "ffmpeg",
+      detail: "FFmpeg completed but output file is missing",
+      picked,
+      ffmpegStderr,
+    };
   }
 
   const clipData = readFileSync(clipPath);
@@ -532,7 +707,7 @@ async function createYouTubeClipFile(
     try { unlinkSync(clipPath); } catch {}
   };
 
-  return { data: clipData, cleanup };
+  return { ok: true, data: clipData, cleanup, picked, pickReason: pick.reason, candidates: search.candidates };
 }
 
 async function identifySongWithAI(query: string, log: any): Promise<{ title: string; artist: string; year: number; youtube_query: string; iconic_lyrics_fragment: string; confidence: string } | null> {
@@ -1615,8 +1790,21 @@ router.post("/identify", async (req, res) => {
   }
 });
 
+function clipFailureBody(result: Extract<ClipResult, { ok: false }>, debug: boolean) {
+  const base: Record<string, unknown> = { error: "Failed to create YouTube clip", stage: result.stage };
+  if (debug) {
+    base.detail = result.detail;
+    if (result.picked) base.picked = result.picked;
+    if (result.ytStdout) base.ytStdout = result.ytStdout.slice(-2000);
+    if (result.ytStderr) base.ytStderr = result.ytStderr.slice(-2000);
+    if (result.ffmpegStderr) base.ffmpegStderr = result.ffmpegStderr.slice(-2000);
+  }
+  return base;
+}
+
 router.post("/clip-youtube", async (req, res) => {
-  const { youtubeQuery, startSeconds, durationSeconds } = req.body;
+  const debug = req.query.debug === "1";
+  const { youtubeQuery, startSeconds, durationSeconds, trackDurationMs } = req.body;
 
   if (!youtubeQuery || typeof youtubeQuery !== "string" || youtubeQuery.trim().length < 2 || youtubeQuery.length > 300) {
     res.status(400).json({ error: "Invalid youtubeQuery (2-300 chars)" });
@@ -1628,28 +1816,34 @@ router.post("/clip-youtube", async (req, res) => {
     res.status(400).json({ error: "startSeconds must be >= 0, durationSeconds must be 3-30" });
     return;
   }
+  const trackDurationMsNum = trackDurationMs !== undefined ? parseFloat(trackDurationMs) : undefined;
+  req.log.info({ youtubeQuery, startSeconds: start, durationSeconds: duration, trackDurationMs: trackDurationMsNum }, "clip-youtube request");
 
   try {
-    const result = await createYouTubeClipFile(youtubeQuery, start, duration, req.log);
-    if (!result) {
-      res.status(502).json({ error: "Failed to create YouTube clip" });
+    const result = await createYouTubeClipFile(youtubeQuery, start, duration, req.log, trackDurationMsNum);
+    if (!result.ok) {
+      res.status(502).json(clipFailureBody(result, debug));
       return;
     }
 
     res.setHeader("Content-Type", "audio/mp4");
     res.setHeader("Content-Disposition", "attachment; filename=singsing.m4a");
     res.setHeader("Content-Length", result.data.length);
+    res.setHeader("X-Singsing-Picked-Id", result.picked.id);
+    res.setHeader("X-Singsing-Picked-Duration", String(result.picked.durationSec));
+    res.setHeader("X-Singsing-Pick-Reason", result.pickReason);
     res.send(result.data);
 
     result.cleanup();
-  } catch (err) {
+  } catch (err: any) {
     req.log.error({ err }, "YouTube clip creation failed");
-    res.status(500).json({ error: "Failed to create YouTube clip" });
+    res.status(500).json({ error: "Failed to create YouTube clip", ...(debug ? { detail: err?.message || String(err) } : {}) });
   }
 });
 
 router.post("/clip-youtube/host", async (req, res) => {
-  const { youtubeQuery, startSeconds, durationSeconds, trackName, artistName, artworkUrl, lyrics, senderName } = req.body;
+  const debug = req.query.debug === "1";
+  const { youtubeQuery, startSeconds, durationSeconds, trackDurationMs, trackName, artistName, artworkUrl, lyrics, senderName } = req.body;
 
   if (!youtubeQuery || typeof youtubeQuery !== "string" || youtubeQuery.trim().length < 2 || youtubeQuery.length > 300) {
     res.status(400).json({ error: "Invalid youtubeQuery (2-300 chars)" });
@@ -1661,11 +1855,13 @@ router.post("/clip-youtube/host", async (req, res) => {
     res.status(400).json({ error: "startSeconds must be >= 0, durationSeconds must be 3-30" });
     return;
   }
+  const trackDurationMsNum = trackDurationMs !== undefined ? parseFloat(trackDurationMs) : undefined;
+  req.log.info({ youtubeQuery, startSeconds: start, durationSeconds: duration, trackDurationMs: trackDurationMsNum, trackName, artistName }, "clip-youtube/host request");
 
   try {
-    const result = await createYouTubeClipFile(youtubeQuery, start, duration, req.log);
-    if (!result) {
-      res.status(502).json({ error: "Failed to create YouTube clip" });
+    const result = await createYouTubeClipFile(youtubeQuery, start, duration, req.log, trackDurationMsNum);
+    if (!result.ok) {
+      res.status(502).json(clipFailureBody(result, debug));
       return;
     }
 
@@ -1681,11 +1877,68 @@ router.post("/clip-youtube/host", async (req, res) => {
     const protocol = domain.includes("localhost") ? "http" : "https";
     const clipUrl = `${protocol}://${domain}/s/${clipId}`;
 
-    res.json({ clipId, clipUrl });
-  } catch (err) {
+    res.json({ clipId, clipUrl, picked: result.picked, pickReason: result.pickReason });
+  } catch (err: any) {
     req.log.error({ err }, "YouTube clip hosting failed");
-    res.status(500).json({ error: "Failed to host YouTube clip" });
+    res.status(500).json({ error: "Failed to host YouTube clip", ...(debug ? { detail: err?.message || String(err) } : {}) });
   }
+});
+
+router.get("/clip-youtube/debug", async (req, res) => {
+  const youtubeQuery = (req.query.youtubeQuery as string) || "";
+  const startSeconds = parseFloat((req.query.startSeconds as string) || "0");
+  const durationSeconds = parseFloat((req.query.durationSeconds as string) || "0");
+  const trackDurationMs = req.query.trackDurationMs ? parseFloat(req.query.trackDurationMs as string) : undefined;
+
+  if (!youtubeQuery || youtubeQuery.trim().length < 2 || youtubeQuery.length > 300) {
+    res.status(400).json({ error: "Invalid youtubeQuery (2-300 chars)" });
+    return;
+  }
+
+  const sanitizedQuery = youtubeQuery.replace(/[^\w\s\-'àâäéèêëïîôùûüÿçœæÀÂÄÉÈÊËÏÎÔÙÛÜŸÇŒÆ]/gi, '').slice(0, 200);
+  if (!sanitizedQuery.trim()) {
+    res.status(400).json({ error: "Query empty after sanitization", sanitizedQuery });
+    return;
+  }
+
+  const search = await ytdlpSearchN(sanitizedQuery, 5, req.log);
+  if (!search.ok) {
+    res.status(502).json({
+      error: "yt-dlp search failed",
+      sanitizedQuery,
+      detail: search.detail,
+      ytStdout: search.ytStdout?.slice(-2000),
+      ytStderr: search.ytStderr?.slice(-2000),
+    });
+    return;
+  }
+
+  const pick = pickBestCandidate(search.candidates, trackDurationMs);
+  const expectedSec = trackDurationMs ? trackDurationMs / 1000 : undefined;
+  const actualSec = pick.picked.durationSec;
+  const durationMatch = expectedSec
+    ? {
+        expectedSec,
+        actualSec,
+        deltaSec: actualSec - expectedSec,
+        deltaPct: expectedSec > 0 ? ((actualSec - expectedSec) / expectedSec) * 100 : null,
+      }
+    : null;
+
+  res.json({
+    request: {
+      youtubeQuery,
+      sanitizedQuery,
+      startSeconds,
+      durationSeconds,
+      trackDurationMs,
+    },
+    picked: pick.picked,
+    pickReason: pick.reason,
+    durationMatch,
+    candidates: pick.candidates,
+    filteredOutByTitle: pick.filteredOut,
+  });
 });
 
 const previewCache = new Map<string, { data: Buffer; fetchedAt: number }>();

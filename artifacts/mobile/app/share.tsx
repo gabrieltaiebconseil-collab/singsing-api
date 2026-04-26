@@ -23,6 +23,13 @@ import { useColors } from "@/hooks/useColors";
 
 type ClipState = "loading" | "ready" | "error";
 type CopyState = "idle" | "copied";
+type ClipErrorStage = "host-fetch" | "host-response" | "host-parse" | "clip-fetch" | "clip-response" | "clip-blob" | "unknown";
+type ClipError = {
+  stage: ClipErrorStage;
+  status?: number;
+  body?: string;
+  message: string;
+};
 
 function detectIsMobile(): boolean {
   if (Platform.OS !== "web") return true;
@@ -120,6 +127,7 @@ export default function ShareScreen() {
   }>();
 
   const [clipState, setClipState] = useState<ClipState>("loading");
+  const [clipError, setClipError] = useState<ClipError | null>(null);
   const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
   const [hostedClipUrl, setHostedClipUrl] = useState<string | null>(null);
   const [clipId, setClipId] = useState<string | null>(null);
@@ -134,24 +142,40 @@ export default function ShareScreen() {
     let cancelled = false;
 
     async function fetchClipAndHost() {
+      const baseUrl = `https://${process.env.EXPO_PUBLIC_DOMAIN}`;
+      const startSec = parseFloat(params.startTime || "0");
+      const endSec = parseFloat(params.endTime || "0");
+      const duration = Math.max(3, Math.min(30, endSec - startSec));
+      const trackDurationMs = parseFloat(params.trackTimeMillis || "0") || undefined;
+      const youtubeQuery = params.youtubeQuery || `${params.trackName} ${params.artistName} official audio`;
+
+      const requestPayload = {
+        youtubeQuery,
+        startSeconds: startSec,
+        durationSeconds: duration,
+        trackDurationMs,
+      };
+      console.log("[singsing/share] clip request", {
+        ...requestPayload,
+        trackName: params.trackName,
+        artistName: params.artistName,
+      });
+
+      const fail = (err: ClipError) => {
+        console.error("[singsing/share] clip failed", err);
+        if (!cancelled) {
+          setClipError(err);
+          setClipState("error");
+        }
+      };
+
+      let hostResponse: Response;
       try {
-        const baseUrl = `https://${process.env.EXPO_PUBLIC_DOMAIN}`;
-        const isYouTube = params.source === "youtube" && params.youtubeQuery;
-        const startSec = parseFloat(params.startTime || "0");
-        const endSec = parseFloat(params.endTime || "0");
-        const duration = Math.max(3, Math.min(30, endSec - startSec));
-
-        let hostResponse: Response;
-
-        // Always use YouTube path for precise clip cutting
-        const youtubeQuery = params.youtubeQuery || `${params.trackName} ${params.artistName} official audio`;
-        hostResponse = await fetch(`${baseUrl}/api/songs/clip-youtube/host`, {
+        hostResponse = await fetch(`${baseUrl}/api/songs/clip-youtube/host?debug=1`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            youtubeQuery: youtubeQuery,
-            startSeconds: startSec,
-            durationSeconds: duration,
+            ...requestPayload,
             trackName: params.trackName || "",
             artistName: params.artistName || "",
             artworkUrl: params.artworkUrl100 || "",
@@ -159,39 +183,52 @@ export default function ShareScreen() {
             senderName: "",
           }),
         });
+      } catch (e: any) {
+        return fail({ stage: "host-fetch", message: e?.message || String(e) });
+      }
 
-        if (!hostResponse.ok) throw new Error("Failed to create clip");
+      if (!hostResponse.ok) {
+        const body = await hostResponse.text().catch(() => "");
+        return fail({ stage: "host-response", status: hostResponse.status, body, message: `host ${hostResponse.status}` });
+      }
 
-        const hostData = await hostResponse.json();
-        const clipUrl: string | null = hostData.clipUrl || null;
-        const serverClipId: string | null = hostData.clipId || null;
+      let hostData: any;
+      try {
+        hostData = await hostResponse.json();
+      } catch (e: any) {
+        return fail({ stage: "host-parse", message: e?.message || String(e) });
+      }
+      const clipUrl: string | null = hostData.clipUrl || null;
+      const serverClipId: string | null = hostData.clipId || null;
 
-        let clipResponse: Response;
-        // Always use YouTube path
-        clipResponse = await fetch(`${baseUrl}/api/songs/clip-youtube`, {
+      let clipResponse: Response;
+      try {
+        clipResponse = await fetch(`${baseUrl}/api/songs/clip-youtube?debug=1`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            youtubeQuery: youtubeQuery,
-            startSeconds: startSec,
-            durationSeconds: duration,
-          }),
+          body: JSON.stringify(requestPayload),
         });
+      } catch (e: any) {
+        return fail({ stage: "clip-fetch", message: e?.message || String(e) });
+      }
 
-        if (!clipResponse.ok) throw new Error("Failed to download clip");
+      if (!clipResponse.ok) {
+        const body = await clipResponse.text().catch(() => "");
+        return fail({ stage: "clip-response", status: clipResponse.status, body, message: `clip ${clipResponse.status}` });
+      }
 
-        const blob = await clipResponse.blob();
+      let blob: Blob;
+      try {
+        blob = await clipResponse.blob();
+      } catch (e: any) {
+        return fail({ stage: "clip-blob", message: e?.message || String(e) });
+      }
 
-        if (!cancelled) {
-          setAudioBlob(blob);
-          setHostedClipUrl(clipUrl);
-          setClipId(serverClipId);
-          setClipState("ready");
-        }
-      } catch {
-        if (!cancelled) {
-          setClipState("error");
-        }
+      if (!cancelled) {
+        setAudioBlob(blob);
+        setHostedClipUrl(clipUrl);
+        setClipId(serverClipId);
+        setClipState("ready");
       }
     }
 
@@ -355,6 +392,21 @@ export default function ShareScreen() {
             <Text style={[styles.loadingSubtext, { color: colors.mutedForeground }]}>
               {"Impossible de cr\u00E9er le clip audio. R\u00E9essayez."}
             </Text>
+            {__DEV__ && clipError && (
+              <View style={{ marginTop: 16, padding: 12, borderRadius: 8, backgroundColor: "rgba(255,0,0,0.12)", maxWidth: 480 }}>
+                <Text style={{ color: colors.destructive, fontSize: 12, fontWeight: "700" }}>
+                  {`[DEV] stage=${clipError.stage}${clipError.status ? ` status=${clipError.status}` : ""}`}
+                </Text>
+                <Text style={{ color: colors.foreground, fontSize: 11, marginTop: 4 }} selectable>
+                  {clipError.message}
+                </Text>
+                {clipError.body ? (
+                  <Text style={{ color: colors.mutedForeground, fontSize: 10, marginTop: 6 }} selectable>
+                    {clipError.body.slice(0, 800)}
+                  </Text>
+                ) : null}
+              </View>
+            )}
             <Pressable
               onPress={() => router.back()}
               style={[styles.retryButton, { backgroundColor: colors.primary, borderRadius: colors.radius }]}
